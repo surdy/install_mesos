@@ -41,12 +41,12 @@ install_mesos --masters \"1.1.1.1,2.2.2.2,3.3.3.3\" --hostname mesos-master-01 -
 ```
 --masters
 ```
-Specify a comma separated list of IP addresses of all the masters in the cluster. This information is used to configure Mesos master service to find how many masters are there in the cluster and what are their IP addresses. If this parameter is not specified it defaults to 1 master running on `localhost`.
+Specify a comma separated list of IP addresses of all the masters in the cluster. This information is used to configure Mesos master service to find how many masters are there in the cluster and since we are setting up a cluster where mesos masters are co-located with the ZooKeeper instances we use the IP addresses to configure the ZooKeper URL(used in leader election). If this parameter is not specified it defaults to 1 master running on `localhost`.
 
 ```
 --hostname
 ```
-Specify the resolvable hostname of the node. If the hostname of the machine cannot be resolved directly (e.g., if on a different network or using a VPN), you may need to configure Mesos with a hostname value that you can resolve, for example, an externally accessible IP address or DNS hostname. This will ensure all links from the Mesos console work correctly. If this parameter is not specified Mesos tries to resolve the hostname itself and may lead to an internal hostname being used (As compared to an externally resolvable one)
+Specify the resolvable hostname of the node. If the hostname of the machine cannot be resolved directly (e.g., if on a different network or using a VPN), you may need to configure Mesos with a hostname value that you can resolve, for example, an externally accessible IP address or DNS hostname. This will ensure all links from the Mesos console work correctly. If this parameter is not specified Mesos uses system hostname and may lead to an internal hostname being used (As compared to an externally resolvable one)
 
 ```
 --mesos
