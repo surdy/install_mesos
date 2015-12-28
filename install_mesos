@@ -350,7 +350,8 @@ function configure_zookeeper
             count=$((count+1))
             zk_conf+="server.${count}=${ip}:2888:3888"$'\n'
         done 
-        sudo bash -c "echo \"$zk_conf\" > /etc/zookeeper/conf/zoo.cfg"
+        sudo sed -i '/server\.[[:digit:]]\+/d' /etc/zookeeper/conf/zoo.cfg
+        sudo bash -c "echo \"$zk_conf\" >> /etc/zookeeper/conf/zoo.cfg"
     fi
 }
 
@@ -523,7 +524,7 @@ do
                 done
                 if [ $((count%2)) -eq 0 ]
                 then
-                    err_exit "You entered an even number of master. We recommend running an odd number of masters."
+                    err_exit "You entered an even number of masters. We recommend running an odd number of masters."
                 fi
                 
                ;;
