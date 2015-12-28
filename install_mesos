@@ -1,0 +1,597 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+distro=""            # Name/Version of distro: e.g. centos/6.5, ubuntu/14.05
+type_master=false
+type_agent=false
+masters_specified=false
+script_basename=$(basename "$0")
+declare -a master_ips='()'
+node_hostname=""
+mesos_version=""
+marathon_version=""
+
+function err_exit
+{
+    echo "$*" "Exiting." >&2
+    exit 1
+}
+
+function usage
+{
+    echo 
+    echo "Usage: $script_basename [--masters <comma-separated-master-ip-list>] [--hostname <resolvable-hostname-for-node>] [--mesos <vesrion> [--marathon <version] <node-type>"
+    echo 
+    echo "Example: $script_basename --masters \"1.1.1.1,2.2.2.2,3.3.3.3\" --hostname mesos-master-01 master"
+}
+
+# Validate if a given string is a valid IPv4 address or not 
+# returns :
+#         0 --> valid IP
+#         1 --> invalid IP
+function valid_ip
+{
+    local  ip="$1"
+    local  stat=1
+
+    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        OIFS=$IFS
+        IFS='.'
+        ip=($ip)
+        IFS=$OIFS
+        [[ ${ip[0]} -le 255 && ${ip[1]} -le 255 \
+            && ${ip[2]} -le 255 && ${ip[3]} -le 255 ]]
+        stat=$?
+    fi
+    return $stat    
+}
+
+# Prepend "sudo" to command if not running as root 
+function sudo
+{
+    if [[ $(id -u) = 0 ]]
+        then "$@"
+    else
+        $(which sudo) "$@"
+    fi
+}
+
+# Print a normalized string for a distro
+# e.g. rhel/6.5 ubuntu/14.04, centos/7.1 
+function print_distro_string
+{
+    distro_name="$( echo "$1"  | tr A-Z a-z )"
+    distro_version="$( echo "$2" | tr A-Z a-z )"
+    echo "$distro_name/$distro_version"
+}
+
+# Detect the distro on the box
+function detect_distro
+{
+    # Check for Debian based Distros
+    # ID and VERSION_ID in /etc/os-release give the Distro and Version
+    if [[ -f /etc/os-release ]]
+    then
+        ( source /etc/os-release && print_distro_string "$ID" "$VERSION_ID" )
+        return
+    fi
+    # Check for Redhat based Distros
+    # /etc/redhat-release contains the Distro and Version in the following format :
+    # CentOS release 6.3 (Final)
+    if [[ -f /etc/redhat-release ]]
+    then
+        if [[ $(cat /etc/redhat-release) =~ \
+            ^(.+)' '+release' '+([^ ]+)' '+'('[^')']+')'$ ]]
+        then
+            local distro_name
+            case "${BASH_REMATCH[1]}" in
+                'Red Hat '*) distro_name=rhel ;;
+                *)           distro_name="${BASH_REMATCH[1]}" ;;
+            esac
+            print_distro_string "$distro_name" "${BASH_REMATCH[2]}"
+            return
+        else
+            err_exit "/etc/redhat-release not in expected format: <distro> release <version> (<remark>)"
+        fi
+    fi
+    err_exit "Could not determine OS version OR an unspported distro"
+}
+
+# Set up Mesosphere repo for Ubuntu / Debian 
+function setup_apt_repo
+{
+
+    echo "Setting up apt repo"
+    # Setup
+    sudo apt-key adv --keyserver keyserver.ubuntu.com --recv E56151BF
+    echo "Done adding key"
+    DISTRO=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
+    CODENAME=$(lsb_release -cs)
+    
+    echo "Adding repo"
+    # Add the repository
+    echo "deb http://repos.mesosphere.com/${DISTRO} ${CODENAME} main" | \
+      sudo tee /etc/apt/sources.list.d/mesosphere.list
+    sudo apt-get -y update
+}
+
+# Set up Mesosphere repo for Redhat 6 / Centos 6 
+function setup_el6_repo
+{
+    echo "Setting up EL6 repo"
+    # Add the repository
+    sudo rpm -Uvh http://repos.mesosphere.com/el/6/noarch/RPMS/mesosphere-el-repo-6-2.noarch.rpm
+}
+
+# Set up Mesosphere repo for Redhat 7 / Centos 7 
+function setup_el7_repo
+{
+    echo "Setting up EL7 repo"
+    # Add the repository
+    sudo rpm -Uvh http://repos.mesosphere.com/el/7/noarch/RPMS/mesosphere-el-repo-7-1.noarch.rpm
+}
+
+# Set up Mesosphere repo depending on the distro
+function setup_mesosphere_repo
+{
+    echo "Setting up Mesosphere Repo to install Mesos"
+    echo $distro
+    case $distro in
+        debian/*|ubuntu/*)                      setup_apt_repo ;;
+        rhel/6|rhel/6.*|centos/6|centos/6.*)    setup_el6_repo ;;
+        rhel/7|rhel/7.*|centos/7|centos/7.*)    setup_el7_repo ;;
+        *)                                      err_exit "Unsupported distro" ;;
+    esac
+}
+
+# Compare two given version strings
+# Inputs: The two version strings to compare
+# Output: 0 --> =
+#         1 --> > 
+#         2 --> <
+function compare_version 
+{
+    if [[ $1 == $2 ]]
+    then
+        return 0
+    fi
+    local IFS=.
+    local i ver1=($1) ver2=($2)
+    # fill empty fields in ver1 with zeros
+    for ((i=${#ver1[@]}; i<${#ver2[@]}; i++))
+    do
+        ver1[i]=0
+    done
+    for ((i=0; i<${#ver1[@]}; i++))
+    do
+        if [[ -z ${ver2[i]} ]]
+        then
+            # fill empty fields in ver2 with zeros
+            ver2[i]=0
+        fi
+        if ((10#${ver1[i]} > 10#${ver2[i]}))
+        then
+            return 1
+        fi
+        if ((10#${ver1[i]} < 10#${ver2[i]}))
+        then
+            return 2
+        fi
+    done
+    return 0
+}
+
+# Find the version of the package in the repo matching the version specified
+# Input: Package name, Version string
+# Output: Matching package version in the repo 
+function find_pkg_version
+{
+    local package="$1"
+    local version="$2"
+    local all_versions=""
+    local pkg_ver=""
+    case $distro in
+        debian/*|ubuntu/*) 
+            all_versions=$(apt-cache madison $package | awk -F"|" '{print $2}')
+            pkg_ver=$(echo "$all_versions" | grep " \+$version" | head -n1)
+                        ;;
+        rhel/*|centos/*) 
+            all_versions=$(yum list mesos --showduplicates | grep mesosphere | awk '{print $2}')
+            pkg_ver=$(echo "$all_versions" | grep mesosphere | grep " \+$version" | tail -n1)
+            ;;
+        *)    err_exit "Unsupported distro" ;;
+    esac
+
+    if [ -z "$pkg_ver" ]
+    then
+        err_exit "No version matching $2 found in the repo. The list of available versions in the repo is:
+        $all_versions"
+    fi
+    echo $pkg_ver
+}
+
+function install_mesos
+{
+    local pkg_version=""
+    if [ -n "$mesos_version" ] 
+    then
+        pkg_version=$(find_pkg_version mesos $mesos_version)
+    fi
+
+    case $distro in
+        debian/*|ubuntu/*) 
+            if [ -z "$pkg_version" ]
+            then
+                sudo apt-get -y install mesos
+            else
+                sudo apt-get -y install "mesos=$pkg_version"
+            fi
+            ;;
+        rhel/*|centos/*)
+            if [ -z "$pkg_version" ]
+            then 
+                sudo yum -y install mesos
+            else
+                sudo yum -y install "mesos-$pkg_version" 
+            fi
+            ;;
+        *)    err_exit "Unsupported distro" ;;
+    esac
+}
+
+function install_zookeeper
+{
+    case $distro in
+        rhel/6|rhel/6.*|centos/6|centos/6.*)    
+            sudo rpm -Uvh http://archive.cloudera.com/cdh4/one-click-install/redhat/6/x86_64/cloudera-cdh-4-0.x86_64.rpm
+            sudo yum -y install zookeeper
+            ;;
+        rhel/7|rhel/7.*|centos/7|centos/7.*)    sudo yum -y install mesosphere-zookeeper  ;;
+        *)    err_exit "Unsupported distro" ;;
+    esac
+}
+
+# Install Java 8 on Debian based distros
+function install_java8
+{
+    #sudo add-apt-repository ppa:webupd8team/java
+    echo "deb http://ppa.launchpad.net/webupd8team/java/ubuntu trusty main" | sudo tee /etc/apt/sources.list.d/webupd8team-java.list
+    echo "deb-src http://ppa.launchpad.net/webupd8team/java/ubuntu trusty main" | sudo tee -a /etc/apt/sources.list.d/webupd8team-java.list
+    sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys EEA14886
+    sudo apt-get update
+    echo debconf shared/accepted-oracle-license-v1-1 select true | sudo debconf-set-selections
+    echo debconf shared/accepted-oracle-license-v1-1 seen true | sudo debconf-set-selections
+    sudo apt-get -y install oracle-java8-installer
+}
+
+function install_marathon
+{
+    local pkg_version=""
+    if [ -n "$marathon_version" ]
+    then
+        pkg_version=$(find_pkg_version marathon $marathon_version)
+    fi
+
+    case $distro in
+        debian/*|ubuntu/*)     
+            if [ -z "$pkg_version" ]
+            then
+                install_java8 
+                sudo apt-get -y install marathon 
+            else
+                # Install Java 8 if marathon version is 0.11.0+
+                local cmp=$(compare_version $marathon_version "0.11.0"; echo $?)
+                if [ $cmp -ne 2 ] 
+                then
+                    install_java8 
+                fi
+                sudo apt-get -y install "marathon=$pkg_version" 
+            fi
+            ;;
+        rhel/*|centos/*)
+            if [ -z "$pkg_version" ]
+            then
+                sudo yum -y install marathon
+            else
+                sudo yum -y install "marathon-$pkg_version"
+            fi
+            install_zookeeper 
+            ;;
+        *)    err_exit "Unsupported distro" ;;
+    esac
+}
+
+function configure_mesos
+{
+    local etc_mesos_zk='zk://'
+    ips_left=${#master_ips[@]}
+    if [ $ips_left -eq 0 ]
+    then
+        etc_mesos_zk+="localhost:2181/mesos"
+    else
+        for ip in "${master_ips[@]}"
+        do
+            if [ $ips_left -eq 1 ]
+            then
+                etc_mesos_zk+="${ip}:2181/mesos"
+            else
+                etc_mesos_zk+="${ip}:2181,"
+            fi
+            ips_left=$((ips_left-1))
+        done    
+    fi
+    sudo bash -c "echo $etc_mesos_zk > /etc/mesos/zk"
+}
+
+function configure_zookeeper
+{
+    case $distro in
+        debian/*|ubuntu/*)     
+            sudo bash -c "echo 1 > /etc/zookeeper/conf/myid"
+            ;;
+        rhel/6|rhel/6.*|centos/6|centos/6.*)
+            sudo zookeeper-server-initialize --myid=1 
+            ;;
+        rhel/7|rhel/7.*|centos/7|centos/7.*)
+            sudo bash -c "echo 1 > /var/lib/zookeeper/myid" 
+            ;;
+        *)    err_exit "Unsupported distro" ;;
+    esac
+
+    if [ ${#master_ips[@]} -ne 0 ] 
+    then
+        local zk_conf=""
+        local count=0
+        for ip in "${master_ips[@]}"
+        do
+            count=$((count+1))
+            zk_conf+="server.${count}=${ip}:2888:3888"$'\n'
+        done 
+        sudo bash -c "echo \"$zk_conf\" > /etc/zookeeper/conf/zoo.cfg"
+    fi
+}
+
+function configure_mesos_master
+{
+    local num_masters=${#master_ips[@]} 
+    if [ $num_masters -eq 0 ]
+    then
+        num_masters=1
+    fi
+    # num_masters is garunteed to be an odd number since we validated that
+    # so quorum is num_masters/2 + 1
+    local quorum=$((num_masters/2 + 1))
+    sudo bash -c "echo $quorum > /etc/mesos-master/quorum"
+    
+    if [ -n "$node_hostname" ]
+    then
+        sudo bash -c "echo $node_hostname > /etc/mesos-master/hostname"
+    fi  
+}
+
+function configure_mesos_agent
+{
+    if [ -n "$node_hostname" ]
+    then
+        sudo bash -c "echo $node_hostname > /etc/mesos-slave/hostname"
+    fi  
+}
+
+function configure_marathon
+{
+    if [ -n "$node_hostname" ]
+    then
+        sudo bash -c "echo $node_hostname > /etc/marathon/conf/hostname"
+    fi  
+}
+
+function start_zookeeper
+{
+    case $distro in
+        ubuntu/*|debian/*)
+            sudo service zookeeper restart
+            ;;
+        rhel/6|rhel/6.*|centos/6|centos/6.*)
+            sudo zookeeper-server start
+            ;;
+        rhel/7|rhel/7.*|centos/7|centos/7.*)
+            sudo systemctl start zookeeper
+            ;;
+        *)    err_exit "Unsupported distro" ;;
+    esac
+    
+}
+
+# Check is a given service is running
+# 0 --> running
+# 1 --> not running
+function service_running
+{
+    local service="$1"
+    local stat=1
+
+    local service_status="$(sudo service $service status)"
+
+    if [[ $service_status == *"start/running"* ]] 
+    then
+        stat=0
+    fi
+
+    return $stat
+}
+
+function stop_service
+{
+    local service="$1"
+    if service_running $service
+    then
+        sudo service $service stop
+    fi
+}
+
+function disable_service
+{
+    local service="$1"
+
+    case $distro in
+        ubuntu/*)     
+           stop_service $service
+           sudo sh -c "echo manual > /etc/init/${service}.override"
+            ;;
+        debian/*)
+            sudo service $service stop
+            sudo update-rc.d -f $service remove
+            ;;
+        rhel/6|rhel/6.*|centos/6|centos/6.*)
+            sudo stop $service
+            sudo sh -c "echo manual > /etc/init/${service}.override"
+            ;;
+        rhel/7|rhel/7.*|centos/7|centos/7.*)
+            systemctl stop ${service}.service
+            systemctl disable ${service}.service
+            ;;
+        *)    err_exit "Unsupported distro" ;;
+    esac
+}
+
+function restart_service
+{
+    local service="$1"
+
+    case $distro in
+        ubuntu/*|debian/*|rhel/7|rhel/7.*|centos/7|centos/7.*)
+            sudo service $service restart 
+            ;;
+        rhel/6|rhel/6.*|centos/6|centos/6.*)
+            sudo restart $service
+            ;;
+        *)    err_exit "Unsupported distro" ;;
+    esac
+}
+
+function setup_master
+{
+    install_marathon
+    configure_zookeeper
+    start_zookeeper
+    configure_mesos_master
+    configure_marathon
+    if [ "$type_agent" = false ]
+    then
+        disable_service mesos-slave
+    fi
+    restart_service mesos-master
+    restart_service marathon
+}
+
+function setup_agent
+{
+    configure_mesos_agent
+    if [ "$type_master" = false ]
+    then
+        disable_service mesos-master
+    fi
+    restart_service mesos-slave
+}
+
+#parse arguments
+ARGS=$(getopt -o h --long "masters:,hostname:,mesos:,marathon:,help" -n "$script_basename" -- "$@")
+
+eval set -- "$ARGS"
+
+while true
+do
+    case "$1" in
+        --masters) 
+                masters_specified=true
+                shift
+                master_list=$1
+                shift
+                count=0
+                for ip in $(echo $master_list | sed "s/,/ /g")
+                do
+                    if valid_ip $ip
+                    then
+                        count=$((count+1))
+                        master_ips+=($ip)
+                    else
+                        err_exit "Invalid IP address provided: $ip"
+                    fi
+                done
+                if [ $((count%2)) -eq 0 ]
+                then
+                    err_exit "You entered an even number of master. We recommend running an odd number of masters."
+                fi
+                
+               ;;
+        --hostname)
+                shift
+                node_hostname=$1
+                shift  
+                ;;
+        --mesos)
+                shift
+                mesos_version=$1
+                shift
+                ;;
+        --marathon)
+                shift
+                marathon_version=$1
+                shift
+                ;;
+        -h|--help) 
+                usage 
+                exit
+                ;;
+        --)
+                shift
+                break
+                ;;
+        *)      usage
+                exit 1
+                ;;
+    esac
+done
+
+if [ $# -lt 1 ]
+then
+    echo "Please specify the node type to setup:\"master\", \"agent\" or \"master agent\""
+    usage
+    exit 1
+fi
+#end parse arguments
+
+distro="$(detect_distro)"
+setup_mesosphere_repo
+install_mesos
+configure_mesos
+# Determine the type of node to be set up (Master/Agent)
+node_types=$@
+for node_type in $node_types
+do
+    if [ "$node_type" != "master" -a "$node_type" != "slave" -a "$node_type" != "agent" ] 
+    then
+        echo "Invalid node type $node_type. Valid node types are \"master\" and \"agent\""
+        exit
+    else
+        if [ "$node_type" == "master" ]
+        then
+        type_master=true
+        else
+        type_agent=true
+    fi
+fi
+done
+
+if [ "$type_master" = true ]
+then
+    setup_master
+fi 
+
+if [ "$type_agent" = true ]
+then
+    setup_agent
+fi 
