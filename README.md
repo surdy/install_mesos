@@ -23,7 +23,7 @@ This script currently only supports installation on the Mesosphere Supported dis
 ## Usage
 
 ```
-Usage: install_mesos [--masters <comma-separated-master-ip-list>] [--hostname <resolvable-hostname-for-node>] [--mesos <vesrion> [--marathon <version] <node-type>"
+Usage: install_mesos [--distro <distro>] [--masters <comma-separated-master-ip-list>] [--hostname <resolvable-hostname-for-node>] [--mesos <vesrion> [--marathon <version] <node-type>"
 
 Examples:
 
@@ -39,6 +39,13 @@ install_mesos --masters \"1.1.1.1,2.2.2.2,3.3.3.3\" --hostname mesos-master-01 -
 ```
 
 ```
+--distro
+```
+By default the script tries to detect the linux distro you are running on. But if you would like to bypass the detection specify the distro manually then you can use this option to specify the distro. This would be useful if the script is not detecting the distro correctly or if you are on a not so popular distro which is based on a popular distro e.g. Amazon linux 2015.09 is Redhat 6 based.
+
+You can speficy the distro in this format: ubuntu-14.04, debian-8, rhel-6.5, centos-7 etc
+```
+
 --masters
 ```
 Specify a comma separated list of IP addresses of all the masters in the cluster. This information is used to configure Mesos master service to find how many masters are there in the cluster and since we are setting up a cluster where mesos masters are co-located with the ZooKeeper instances we use the IP addresses to configure the ZooKeper URL(used in leader election). If this parameter is not specified it defaults to 1 master running on `localhost`.

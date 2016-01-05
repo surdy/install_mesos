@@ -4,7 +4,8 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-distro=""            # Name/Version of distro: e.g. centos/6.5, ubuntu/14.05
+distro=""            # Name and version of distro: e.g. centos-6.5, ubuntu-14.05
+distro_type=""       # Distro type e.g. el6, el7, debian
 type_master=false
 type_agent=false
 masters_specified=false
@@ -23,7 +24,7 @@ function err_exit
 function usage
 {
     echo 
-    echo "Usage: $script_basename [--masters <comma-separated-master-ip-list>] [--hostname <resolvable-hostname-for-node>] [--mesos <vesrion> [--marathon <version] <node-type>"
+    echo "Usage: $script_basename [--distro <distro>] [--masters <comma-separated-master-ip-list>] [--hostname <resolvable-hostname-for-node>] [--mesos <vesrion>] [--marathon <version] <node-type>"
     echo 
     echo "Example: $script_basename --masters \"1.1.1.1,2.2.2.2,3.3.3.3\" --hostname mesos-master-01 master"
 }
@@ -60,12 +61,12 @@ function sudo
 }
 
 # Print a normalized string for a distro
-# e.g. rhel/6.5 ubuntu/14.04, centos/7.1 
-function print_distro_string
+# e.g. rhel-6.5 ubuntu-14.04, centos-7.1 
+function print_distro_type
 {
     distro_name="$( echo "$1"  | tr A-Z a-z )"
     distro_version="$( echo "$2" | tr A-Z a-z )"
-    echo "$distro_name/$distro_version"
+    echo "$distro_name-$distro_version"
 }
 
 # Detect the distro on the box
@@ -75,7 +76,7 @@ function detect_distro
     # ID and VERSION_ID in /etc/os-release give the Distro and Version
     if [[ -f /etc/os-release ]]
     then
-        ( source /etc/os-release && print_distro_string "$ID" "$VERSION_ID" )
+        ( source /etc/os-release && print_distro_type "$ID" "$VERSION_ID" )
         return
     fi
     # Check for Redhat based Distros
@@ -91,13 +92,31 @@ function detect_distro
                 'Red Hat '*) distro_name=rhel ;;
                 *)           distro_name="${BASH_REMATCH[1]}" ;;
             esac
-            print_distro_string "$distro_name" "${BASH_REMATCH[2]}"
+            print_distro_type "$distro_name" "${BASH_REMATCH[2]}"
             return
         else
             err_exit "/etc/redhat-release not in expected format: <distro> release <version> (<remark>)"
         fi
     fi
     err_exit "Could not determine OS version OR an unspported distro"
+}
+
+function get_distro_type
+{
+    case $distro in
+        ubuntu-*|debian-*)     
+            distro_type=debian
+            ;;
+        rhel-6|rhel-6.*|centos-6|centos-6.*)
+            distro_type=el6
+            ;;
+        rhel-7|rhel-7.*|centos-7|centos-7.*)
+            distro_type=el7
+            ;;
+        *)    err_exit "Unsupported distro" ;;
+    esac
+    
+    echo $distro_type
 }
 
 # Set up Mesosphere repo for Ubuntu / Debian 
@@ -138,12 +157,11 @@ function setup_el7_repo
 function setup_mesosphere_repo
 {
     echo "Setting up Mesosphere Repo to install Mesos"
-    echo $distro
-    case $distro in
-        debian/*|ubuntu/*)                      setup_apt_repo ;;
-        rhel/6|rhel/6.*|centos/6|centos/6.*)    setup_el6_repo ;;
-        rhel/7|rhel/7.*|centos/7|centos/7.*)    setup_el7_repo ;;
-        *)                                      err_exit "Unsupported distro" ;;
+    case $distro_type in
+        debian)    setup_apt_repo ;;
+        el6)       setup_el6_repo ;;
+        el7)       setup_el7_repo ;;
+        *)         err_exit "Unsupported distro" ;;
     esac
 }
 
@@ -193,12 +211,12 @@ function find_pkg_version
     local version="$2"
     local all_versions=""
     local pkg_ver=""
-    case $distro in
-        debian/*|ubuntu/*) 
+    case $distro_type in
+        debian) 
             all_versions=$(apt-cache madison $package | awk -F"|" '{print $2}')
             pkg_ver=$(echo "$all_versions" | grep " \+$version" | head -n1)
                         ;;
-        rhel/*|centos/*) 
+        el*) 
             all_versions=$(yum list mesos --showduplicates | grep mesosphere | awk '{print $2}')
             pkg_ver=$(echo "$all_versions" | grep mesosphere | grep " \+$version" | tail -n1)
             ;;
@@ -221,8 +239,8 @@ function install_mesos
         pkg_version=$(find_pkg_version mesos $mesos_version)
     fi
 
-    case $distro in
-        debian/*|ubuntu/*) 
+    case $distro_type in
+        debian) 
             if [ -z "$pkg_version" ]
             then
                 sudo apt-get -y install mesos
@@ -230,7 +248,7 @@ function install_mesos
                 sudo apt-get -y install "mesos=$pkg_version"
             fi
             ;;
-        rhel/*|centos/*)
+        el*)
             if [ -z "$pkg_version" ]
             then 
                 sudo yum -y install mesos
@@ -244,13 +262,15 @@ function install_mesos
 
 function install_zookeeper
 {
-    case $distro in
-        rhel/6|rhel/6.*|centos/6|centos/6.*)    
+    case $distro_type in
+        el6)    
             sudo rpm -Uvh http://archive.cloudera.com/cdh4/one-click-install/redhat/6/x86_64/cloudera-cdh-4-0.x86_64.rpm
             sudo yum -y install zookeeper
             ;;
-        rhel/7|rhel/7.*|centos/7|centos/7.*)    sudo yum -y install mesosphere-zookeeper  ;;
-        *)    err_exit "Unsupported distro" ;;
+        el7)
+            sudo yum -y install mesosphere-zookeeper  ;;
+        *)    
+            err_exit "Unsupported distro" ;;
     esac
 }
 
@@ -275,8 +295,8 @@ function install_marathon
         pkg_version=$(find_pkg_version marathon $marathon_version)
     fi
 
-    case $distro in
-        debian/*|ubuntu/*)     
+    case $distro_type in
+        debian)     
             if [ -z "$pkg_version" ]
             then
                 install_java8 
@@ -291,7 +311,7 @@ function install_marathon
                 sudo apt-get -y install "marathon=$pkg_version" 
             fi
             ;;
-        rhel/*|centos/*)
+        el*)
             if [ -z "$pkg_version" ]
             then
                 sudo yum -y install marathon
@@ -328,14 +348,14 @@ function configure_mesos
 
 function configure_zookeeper
 {
-    case $distro in
-        debian/*|ubuntu/*)     
+    case $distro_type in
+        debian)     
             sudo bash -c "echo 1 > /etc/zookeeper/conf/myid"
             ;;
-        rhel/6|rhel/6.*|centos/6|centos/6.*)
+        el6)
             sudo zookeeper-server-initialize --myid=1 
             ;;
-        rhel/7|rhel/7.*|centos/7|centos/7.*)
+        el7)
             sudo bash -c "echo 1 > /var/lib/zookeeper/myid" 
             ;;
         *)    err_exit "Unsupported distro" ;;
@@ -391,14 +411,14 @@ function configure_marathon
 
 function start_zookeeper
 {
-    case $distro in
-        ubuntu/*|debian/*)
+    case $distro_type in
+        debian)
             sudo service zookeeper restart
             ;;
-        rhel/6|rhel/6.*|centos/6|centos/6.*)
+        el6)
             sudo zookeeper-server start
             ;;
-        rhel/7|rhel/7.*|centos/7|centos/7.*)
+        el7)
             sudo systemctl start zookeeper
             ;;
         *)    err_exit "Unsupported distro" ;;
@@ -438,19 +458,19 @@ function disable_service
     local service="$1"
 
     case $distro in
-        ubuntu/*)     
+        ubuntu-*)     
            stop_service $service
            sudo sh -c "echo manual > /etc/init/${service}.override"
             ;;
-        debian/*)
+        debian-*)
             sudo service $service stop
             sudo update-rc.d -f $service remove
             ;;
-        rhel/6|rhel/6.*|centos/6|centos/6.*)
+        rhel-6|rhel-6.*|centos-6|centos-6.*)
             sudo stop $service
             sudo sh -c "echo manual > /etc/init/${service}.override"
             ;;
-        rhel/7|rhel/7.*|centos/7|centos/7.*)
+        rhel-7|rhel-7.*|centos-7|centos-7.*)
             systemctl stop ${service}.service
             systemctl disable ${service}.service
             ;;
@@ -462,11 +482,11 @@ function restart_service
 {
     local service="$1"
 
-    case $distro in
-        ubuntu/*|debian/*|rhel/7|rhel/7.*|centos/7|centos/7.*)
+    case $distro_type in
+        debian|el7)
             sudo service $service restart 
             ;;
-        rhel/6|rhel/6.*|centos/6|centos/6.*)
+        el6)
             sudo restart $service
             ;;
         *)    err_exit "Unsupported distro" ;;
@@ -499,7 +519,7 @@ function setup_agent
 }
 
 #parse arguments
-ARGS=$(getopt -o h --long "masters:,hostname:,mesos:,marathon:,help" -n "$script_basename" -- "$@")
+ARGS=$(getopt -o h --long "masters:,hostname:,mesos:,marathon:,distro:,help" -n "$script_basename" -- "$@")
 
 eval set -- "$ARGS"
 
@@ -543,6 +563,11 @@ do
                 marathon_version=$1
                 shift
                 ;;
+        --distro)
+                shift
+                distro=$1
+                shift
+                ;;
         -h|--help) 
                 usage 
                 exit
@@ -563,12 +588,7 @@ then
     usage
     exit 1
 fi
-#end parse arguments
 
-distro="$(detect_distro)"
-setup_mesosphere_repo
-install_mesos
-configure_mesos
 # Determine the type of node to be set up (Master/Agent)
 node_types=$@
 for node_type in $node_types
@@ -587,6 +607,23 @@ do
 fi
 done
 
+#end parse arguments
+
+if [ -n "$distro" ]
+then
+    if ! [[ $distro =~ ubuntu-*|debian-*|rhel-6|rhel-7|centos-6|centos-7 ]]
+    then
+        err_exit "$distro is not a supported distro"
+    fi
+else
+    distro="$(detect_distro)"
+fi
+
+distro_type="$(get_distro_type)"
+
+setup_mesosphere_repo
+install_mesos
+configure_mesos
 if [ "$type_master" = true ]
 then
     setup_master
