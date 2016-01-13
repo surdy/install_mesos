@@ -405,6 +405,7 @@ function configure_marathon
 {
     if [ -n "$node_hostname" ]
     then
+        sudo /etc/marathon/conf
         sudo bash -c "echo $node_hostname > /etc/marathon/conf/hostname"
     fi  
 }
