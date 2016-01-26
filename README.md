@@ -56,6 +56,11 @@ Specify a comma separated list of IP addresses of all the masters in the cluster
 Specify the resolvable hostname of the node. If the hostname of the machine cannot be resolved directly (e.g., if on a different network or using a VPN), you may need to configure Mesos with a hostname value that you can resolve, for example, an externally accessible IP address or DNS hostname. This will ensure all links from the Mesos console work correctly. If this parameter is not specified Mesos uses system hostname and may lead to an internal hostname being used (As compared to an externally resolvable one)
 
 ```
+--ip
+```
+Specify the nodes IP address to be used for zookeeper config. This should be one of the IPs mentioned in --masters. This information is used to assign the correct myid to the zookeeper instance. This is only relevant for the master nodes and is a required parameter for master node setup 
+
+```
 --mesos
 ```
 Specify the version of Mesos you would like to install. If you would like to install a specific version of Mesos you can use this parameter to specify that. By default it installs the latest version of Mesos.
