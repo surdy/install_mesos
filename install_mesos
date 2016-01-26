@@ -352,14 +352,19 @@ function configure_zookeeper
 {
     # get myid for this host 
     myid=""
-    for i in "${!master_ips[@]}"
-    do
-        if [[ "${master_ips[$i]}" = "$node_ip" ]]
-        then
-            myid=$((i+1))
-            break
-        fi
-    done
+    if [ ${#master_ips[@]} -eq 0 ]
+    then
+        myid=1
+    else
+        for i in "${!master_ips[@]}"
+        do
+            if [[ "${master_ips[$i]}" = "$node_ip" ]]
+            then
+                myid=$((i+1))
+                break
+            fi
+        done
+    fi
 
     if [[ -z "$myid" ]]
     then
@@ -629,7 +634,7 @@ do
         if [ "$node_type" == "master" ]
         then
             type_master=true
-            if [[ -z "node_ip" ]]
+            if [[ -z "node_ip" && ${#master_ips[@]} -gt 0 ]]
             then
                 err_exit "--ip required for setting up a master node. Please specify the hosts ip to be used for ZK"
             fi
