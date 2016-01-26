@@ -9,9 +9,11 @@ distro_type=""       # Distro type e.g. el6, el7, debian
 type_master=false
 type_agent=false
 masters_specified=false
+master_list=""
 script_basename=$(basename "$0")
 declare -a master_ips='()'
 node_hostname=""
+node_ip=""
 mesos_version=""
 marathon_version=""
 
@@ -24,9 +26,9 @@ function err_exit
 function usage
 {
     echo 
-    echo "Usage: $script_basename [--distro <distro>] [--masters <comma-separated-master-ip-list>] [--hostname <resolvable-hostname-for-node>] [--mesos <vesrion>] [--marathon <version] <node-type>"
+    echo "Usage: $script_basename [--distro <distro>] [--masters <comma-separated-master-ip-list>] [--hostname <resolvable-hostname-for-node>] [--ip <host-ip-addr>] [--mesos <vesrion>] [--marathon <version] <node-type>"
     echo 
-    echo "Example: $script_basename --masters \"1.1.1.1,2.2.2.2,3.3.3.3\" --hostname mesos-master-01 master"
+    echo "Example: $script_basename --masters \"1.1.1.1,2.2.2.2,3.3.3.3\" --hostname mesos-master-01 --ip 1.1.1.1 master"
 }
 
 # Validate if a given string is a valid IPv4 address or not 
@@ -348,15 +350,31 @@ function configure_mesos
 
 function configure_zookeeper
 {
+    # get myid for this host 
+    myid=""
+    for i in "${!master_ips[@]}"
+    do
+        if [[ "${master_ips[$i]}" = "$node_ip" ]]
+        then
+            myid=$((i+1))
+            break
+        fi
+    done
+
+    if [[ -z "$myid" ]]
+    then
+        err_exit "Node IP: $node_ip specified is not in the list of masters specified: $master_list" 
+    fi
+
     case $distro_type in
         debian)     
-            sudo bash -c "echo 1 > /etc/zookeeper/conf/myid"
+            sudo bash -c "echo $myid > /etc/zookeeper/conf/myid"
             ;;
         el6)
-            sudo zookeeper-server-initialize --myid=1 
+            sudo zookeeper-server-initialize --myid=$myid 
             ;;
         el7)
-            sudo bash -c "echo 1 > /var/lib/zookeeper/myid" 
+            sudo bash -c "echo $myid > /var/lib/zookeeper/myid" 
             ;;
         *)    err_exit "Unsupported distro" ;;
     esac
@@ -520,7 +538,7 @@ function setup_agent
 }
 
 #parse arguments
-ARGS=$(getopt -o h --long "masters:,hostname:,mesos:,marathon:,distro:,help" -n "$script_basename" -- "$@")
+ARGS=$(getopt -o h --long "masters:,hostname:,ip:,mesos:,marathon:,distro:,help" -n "$script_basename" -- "$@")
 
 eval set -- "$ARGS"
 
@@ -569,6 +587,15 @@ do
                 distro=$1
                 shift
                 ;;
+        --ip)
+                shift
+                node_ip=$1
+                shift
+                if ! valid_ip $ip
+                then
+                    err_exit "Invalid IP address provided: $ip"
+                fi
+                ;;
         -h|--help) 
                 usage 
                 exit
@@ -601,9 +628,13 @@ do
     else
         if [ "$node_type" == "master" ]
         then
-        type_master=true
+            type_master=true
+            if [[ -z "node_ip" ]]
+            then
+                err_exit "--ip required for setting up a master node. Please specify the hosts ip to be used for ZK"
+            fi
         else
-        type_agent=true
+            type_agent=true
     fi
 fi
 done
