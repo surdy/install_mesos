@@ -33,9 +33,9 @@ install_mesos agent
 
 install_mesos master agent
 
-install_mesos --masters \"1.1.1.1,2.2.2.2,3.3.3.3\" --hostname mesos-master-01 master
+install_mesos --masters \"1.1.1.1,2.2.2.2,3.3.3.3\" --hostname mesos-master-01 --ip 1.1.1.1 master
 
-install_mesos --masters \"1.1.1.1,2.2.2.2,3.3.3.3\" --hostname mesos-master-01 --mesos 0.22.1 --maarathon 0.8.2 master 
+install_mesos --masters \"1.1.1.1,2.2.2.2,3.3.3.3\" --hostname mesos-master-01 --ip 1.1.1.1 --mesos 0.22.1 --maarathon 0.8.2 master 
 ```
 
 ```
