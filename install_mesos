@@ -538,6 +538,10 @@ function setup_agent
     if [ "$type_master" = false ]
     then
         disable_service mesos-master
+        if [ "$distro_type" =  "debian" ]
+        then
+            disable_service zookeeper
+        fi
     fi
     restart_service mesos-slave
 }
