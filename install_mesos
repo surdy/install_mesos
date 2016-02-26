@@ -62,15 +62,6 @@ function sudo
     fi
 }
 
-# Print a normalized string for a distro
-# e.g. rhel-6.5 ubuntu-14.04, centos-7.1 
-function print_distro_type
-{
-    distro_name="$( echo "$1"  | tr A-Z a-z )"
-    distro_version="$( echo "$2" | tr A-Z a-z )"
-    echo "$distro_name-$distro_version"
-}
-
 # Detect the distro on the box
 function detect_distro
 {
@@ -78,29 +69,11 @@ function detect_distro
     # ID and VERSION_ID in /etc/os-release give the Distro and Version
     if [[ -f /etc/os-release ]]
     then
-        ( source /etc/os-release && print_distro_type "$ID" "$VERSION_ID" )
+        ( source /etc/os-release && echo "$ID-$VERSION_ID" )
         return
+    else
+        err_exit "Could not determine OS version OR an unspported distro"
     fi
-    # Check for Redhat based Distros
-    # /etc/redhat-release contains the Distro and Version in the following format :
-    # CentOS release 6.3 (Final)
-    if [[ -f /etc/redhat-release ]]
-    then
-        if [[ $(cat /etc/redhat-release) =~ \
-            ^(.+)' '+release' '+([^ ]+)' '+'('[^')']+')'$ ]]
-        then
-            local distro_name
-            case "${BASH_REMATCH[1]}" in
-                'Red Hat '*) distro_name=rhel ;;
-                *)           distro_name="${BASH_REMATCH[1]}" ;;
-            esac
-            print_distro_type "$distro_name" "${BASH_REMATCH[2]}"
-            return
-        else
-            err_exit "/etc/redhat-release not in expected format: <distro> release <version> (<remark>)"
-        fi
-    fi
-    err_exit "Could not determine OS version OR an unspported distro"
 }
 
 function get_distro_type
