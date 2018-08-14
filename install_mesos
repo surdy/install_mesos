@@ -99,25 +99,32 @@ function setup_apt_repo
 {
 
     echo "Setting up apt repo"
-    # Setup
-    sudo apt-key adv --keyserver keyserver.ubuntu.com --recv E56151BF
-    echo "Done adding key"
-    DISTRO=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
-    CODENAME=$(lsb_release -cs)
-    
-    echo "Adding repo"
-    # Add the repository
-    echo "deb http://repos.mesosphere.com/${DISTRO} ${CODENAME} main" | \
-      sudo tee /etc/apt/sources.list.d/mesosphere.list
-    sudo apt-get -y update
+    if [ ! -f /etc/apt/sources.list.d/mesosphere.list ]
+    then
+        
+        # Setup
+        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv E56151BF
+        echo "Done adding key"
+        DISTRO=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
+        CODENAME=$(lsb_release -cs)
+        
+        echo "Adding repo"
+        # Add the repository
+        echo "deb http://repos.mesosphere.com/${DISTRO} ${CODENAME} main" | \
+          sudo tee /etc/apt/sources.list.d/mesosphere.list
+        sudo apt-get -y update
+    fi
 }
 
 # Set up Mesosphere repo for Redhat 6 / Centos 6 
 function setup_el6_repo
 {
     echo "Setting up EL6 repo"
-    # Add the repository
-    sudo rpm -Uvh http://repos.mesosphere.com/el/6/noarch/RPMS/mesosphere-el-repo-6-2.noarch.rpm
+    if [ ! -f /etc/yum.repos.d/mesosphere.repo ]
+    then
+        # Add the repository
+        sudo rpm -Uvh http://repos.mesosphere.com/el/6/noarch/RPMS/mesosphere-el-repo-6-2.noarch.rpm
+    fi
 }
 
 # Set up Mesosphere repo for Redhat 7 / Centos 7 
@@ -126,8 +133,8 @@ function setup_el7_repo
     echo "Setting up EL7 repo"
     if [ ! -f /etc/yum.repos.d/mesosphere.repo ]
     then
-      # Add the repository
-      sudo rpm -Uvh http://repos.mesosphere.com/el/7/noarch/RPMS/mesosphere-el-repo-7-1.noarch.rpm
+        # Add the repository
+        sudo rpm -Uvh http://repos.mesosphere.com/el/7/noarch/RPMS/mesosphere-el-repo-7-1.noarch.rpm
     fi
 }
 
