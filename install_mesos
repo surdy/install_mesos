@@ -13,7 +13,7 @@ master_list=""
 script_basename=$(basename "$0")
 declare -a master_ips='()'
 node_hostname=""
-node_ip=""
+node_ip=$(ip route get 8.8.8.8 | grep -Po '(?<=src )(\d{1,3}.){4}')
 mesos_version=""
 marathon_version=""
 
@@ -124,8 +124,11 @@ function setup_el6_repo
 function setup_el7_repo
 {
     echo "Setting up EL7 repo"
-    # Add the repository
-    sudo rpm -Uvh http://repos.mesosphere.com/el/7/noarch/RPMS/mesosphere-el-repo-7-1.noarch.rpm
+    if [ ! -f /etc/yum.repos.d/mesosphere.repo ]
+    then
+      # Add the repository
+      sudo rpm -Uvh http://repos.mesosphere.com/el/7/noarch/RPMS/mesosphere-el-repo-7-1.noarch.rpm
+    fi
 }
 
 # Set up Mesosphere repo depending on the distro
@@ -189,11 +192,11 @@ function find_pkg_version
     case $distro_type in
         debian) 
             all_versions=$(apt-cache madison $package | awk -F"|" '{print $2}')
-            pkg_ver=$(echo "$all_versions" | grep " \+$version" | head -n1)
+            pkg_ver=$(echo "$all_versions" | grep "^$version" | head -n1)
                         ;;
         el*) 
-            all_versions=$(yum list mesos --showduplicates | grep mesosphere | awk '{print $2}')
-            pkg_ver=$(echo "$all_versions" | grep mesosphere | grep " \+$version" | tail -n1)
+            all_versions=$(yum list $package --showduplicates | grep mesosphere | awk '{print $2}')
+            pkg_ver=$(echo "$all_versions" | grep "^$version" | tail -n1)
             ;;
         *)    err_exit "Unsupported distro" ;;
     esac
@@ -520,7 +523,7 @@ function setup_agent
 }
 
 #parse arguments
-ARGS=$(getopt -o h --long "masters:,hostname:,ip:,mesos:,marathon:,distro:,help" -n "$script_basename" -- "$@")
+ARGS=$(getopt -o h --long "masters:,hostname:,mesos:,marathon:,distro:,help" -n "$script_basename" -- "$@")
 
 eval set -- "$ARGS"
 
@@ -569,15 +572,6 @@ do
                 distro=$1
                 shift
                 ;;
-        --ip)
-                shift
-                node_ip=$1
-                shift
-                if ! valid_ip $ip
-                then
-                    err_exit "Invalid IP address provided: $ip"
-                fi
-                ;;
         -h|--help) 
                 usage 
                 exit
@@ -611,10 +605,6 @@ do
         if [ "$node_type" == "master" ]
         then
             type_master=true
-            if [[ -z "node_ip" && ${#master_ips[@]} -gt 0 ]]
-            then
-                err_exit "--ip required for setting up a master node. Please specify the hosts ip to be used for ZK"
-            fi
         else
             type_agent=true
     fi
